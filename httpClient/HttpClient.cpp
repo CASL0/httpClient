@@ -6,6 +6,7 @@
 #pragma comment(lib,"winhttp.lib")
 
 namespace Win32Util {namespace HttpUtil {
+
 	class CHttpClient::Impl
 	{
 	public:
@@ -14,7 +15,7 @@ namespace Win32Util {namespace HttpUtil {
 	public:
 		Impl();
 		void SetHeader(const std::wstring& sHeader);
-		void get(const std::wstring& sUrl);
+		Response get(const std::wstring& sUrl);
 
 		//URLをホスト名とパスに分解する
 		//sUrl --> (sHostName, sPath)
@@ -27,7 +28,7 @@ namespace Win32Util {namespace HttpUtil {
 
 	CHttpClient::Impl::Impl() :
 		m_hSession(
-			WinHttpOpen(UA.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, WINHTTP_FLAG_ASYNC),
+			WinHttpOpen(UA.c_str(), WINHTTP_ACCESS_TYPE_AUTOMATIC_PROXY, WINHTTP_NO_PROXY_NAME, WINHTTP_NO_PROXY_BYPASS, 0),
 			WinHttpCloseHandle
 		),
 		m_sHeaders(std::wstring())
@@ -41,13 +42,66 @@ namespace Win32Util {namespace HttpUtil {
 		m_sHeaders += L"\r\n";
 	}
 
-	void CHttpClient::Impl::get(const std::wstring& sUrl)
+	Response CHttpClient::Impl::get(const std::wstring& sUrl)
 	{
 		std::wstring sHostName;
 		std::wstring sPath;
 		ParseUrl(sUrl, sHostName, sPath);
+
+		std::shared_ptr<std::remove_pointer<HINTERNET>::type> hConnect(
+			WinHttpConnect(m_hSession.get(), sHostName.c_str(), INTERNET_DEFAULT_HTTPS_PORT, 0),
+			WinHttpCloseHandle
+		);
+		ThrowLastError(hConnect == nullptr, "WinHttpConnect failed");
+
+		std::shared_ptr<std::remove_pointer<HINTERNET>::type> hRequest(
+			WinHttpOpenRequest(hConnect.get(), L"GET", sPath.c_str(), nullptr, WINHTTP_NO_REFERER, WINHTTP_DEFAULT_ACCEPT_TYPES, WINHTTP_FLAG_SECURE),
+			WinHttpCloseHandle
+		);
+		ThrowLastError(hRequest == nullptr, "WinHttpOpenRequest failed");
+
+		BOOL bRet = WinHttpSendRequest(hRequest.get(), m_sHeaders.length() == 0 ? nullptr : m_sHeaders.c_str(), m_sHeaders.length(), WINHTTP_NO_REQUEST_DATA, 0, 0, (DWORD_PTR)nullptr);
+		ThrowLastError(bRet == FALSE, "WinHttpSendRequest failed");
+
+		bRet = WinHttpReceiveResponse(hRequest.get(), nullptr);
+		ThrowLastError(bRet == FALSE, "WinHttpReceiveResponse failed");
+
+		Response response = { 0 };
+		DWORD dwSize = sizeof(DWORD);
+		bRet = WinHttpQueryHeaders(hRequest.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &response.statusCode, &dwSize, WINHTTP_NO_HEADER_INDEX);
+		ThrowLastError(bRet == FALSE, "WinHttpQueryHeaders failed");
+
+		switch (response.statusCode)
+		{
+		case 200:
+		{
+			break;
+		}
+		default:
+		{
+			return response;
+		}
+		}
+
+		//200 OK
+		for (;;)
+		{
+			bRet = WinHttpQueryDataAvailable(hRequest.get(), &dwSize);
+			ThrowLastError(bRet == FALSE, "WinHttpQueryDataAvailable");
+
+			if (dwSize == 0)
+			{
+				break;
+			}
+			std::vector<CHAR> szBuffer(dwSize + 1);
+			bRet = WinHttpReadData(hRequest.get(), (LPVOID)szBuffer.data(), dwSize, nullptr);
+			response.text += std::string(szBuffer.data());
+		}
+
+		return response;
 	}
 
+	
 	void CHttpClient::Impl::ParseUrl(const std::wstring& sUrl, std::wstring& sHostName, std::wstring& sPath)
 	{
 		URL_COMPONENTS urlComponents = { 0 };
@@ -74,9 +128,9 @@ namespace Win32Util {namespace HttpUtil {
 		pimpl->SetHeader(sHeader);
 	}
 
-	void CHttpClient::get(const std::wstring& sUrl)
+	Response CHttpClient::get(const std::wstring& sUrl)
 	{
-		pimpl->get(sUrl);
+		return pimpl->get(sUrl);
 	}
 
 }//namespace HttpUtil

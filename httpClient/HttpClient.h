@@ -3,6 +3,12 @@
 #include <string>
 
 namespace Win32Util {namespace HttpUtil {
+	typedef struct tagResponse
+	{
+		unsigned long statusCode;
+		std::string text;
+	}Response;
+
 	class CHttpClient
 	{
 	private:
@@ -14,7 +20,7 @@ namespace Win32Util {namespace HttpUtil {
 		~CHttpClient() = default;
 
 		void SetHeader(const std::wstring& sHeader);
-		void get(const std::wstring& sUrl);
+		Response get(const std::wstring& sUrl);
 	};
 }
 }
