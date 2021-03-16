@@ -17,6 +17,8 @@ namespace Win32Util {namespace HttpUtil {
 		void SetHeader(const std::wstring& sHeader);
 		Response get(const std::wstring& sUrl);
 
+		DWORD ChooseAuthScheme(DWORD dwSupportedSchemes);
+
 		//URLをホスト名とパスに分解する
 		//sUrl --> (sHostName, sPath)
 		void ParseUrl(const std::wstring& sUrl, std::wstring& sHostName, std::wstring& sPath);
@@ -60,28 +62,63 @@ namespace Win32Util {namespace HttpUtil {
 		);
 		ThrowLastError(hRequest == nullptr, "WinHttpOpenRequest failed");
 
-		BOOL bRet = WinHttpSendRequest(hRequest.get(), m_sHeaders.length() == 0 ? nullptr : m_sHeaders.c_str(), m_sHeaders.length(), WINHTTP_NO_REQUEST_DATA, 0, 0, (DWORD_PTR)nullptr);
-		ThrowLastError(bRet == FALSE, "WinHttpSendRequest failed");
-
-		bRet = WinHttpReceiveResponse(hRequest.get(), nullptr);
-		ThrowLastError(bRet == FALSE, "WinHttpReceiveResponse failed");
-
+		BOOL bDone = FALSE;
+		BOOL bRet;
 		Response response = { 0 };
 		DWORD dwSize = sizeof(DWORD);
-		bRet = WinHttpQueryHeaders(hRequest.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &response.statusCode, &dwSize, WINHTTP_NO_HEADER_INDEX);
-		ThrowLastError(bRet == FALSE, "WinHttpQueryHeaders failed");
+		while (!bDone)
+		{
+			bRet = WinHttpSendRequest(hRequest.get(), m_sHeaders.length() == 0 ? nullptr : m_sHeaders.c_str(), m_sHeaders.length(), WINHTTP_NO_REQUEST_DATA, 0, 0, (DWORD_PTR)nullptr);
+			ThrowLastError(bRet == FALSE, "WinHttpSendRequest failed");
 
-		switch (response.statusCode)
-		{
-		case 200:
-		{
-			break;
-		}
-		default:
-		{
-			return response;
-		}
-		}
+			try
+			{
+				bRet = WinHttpReceiveResponse(hRequest.get(), nullptr);
+				ThrowLastError(bRet == FALSE, "WinHttpReceiveResponse failed");
+			}
+			catch (CWin32Exception& e)
+			{
+				if (e.GetErrorCode() != ERROR_WINHTTP_RESEND_REQUEST)
+				{
+					throw;
+				}
+			}
+
+			bRet = WinHttpQueryHeaders(hRequest.get(), WINHTTP_QUERY_STATUS_CODE | WINHTTP_QUERY_FLAG_NUMBER, WINHTTP_HEADER_NAME_BY_INDEX, &response.statusCode, &dwSize, WINHTTP_NO_HEADER_INDEX);
+			ThrowLastError(bRet == FALSE, "WinHttpQueryHeaders failed");
+
+			switch (response.statusCode)
+			{
+			case 200:
+			{
+				bDone = TRUE;
+				break;
+			}
+			case 401:
+			{
+				DWORD dwSupportedSchemes, dwFirstScheme, dwTarget;
+				bRet = WinHttpQueryAuthSchemes(hRequest.get(), &dwSupportedSchemes, &dwFirstScheme, &dwTarget);
+				ThrowLastError(bRet == FALSE, "WinHttpQueryAuthSchemes failed");
+
+				DWORD dwSelectedScheme = ChooseAuthScheme(dwSupportedSchemes);
+				if (dwSelectedScheme == 0)
+				{
+					return response;
+				}
+
+				bRet = WinHttpSetCredentials(hRequest.get(), dwTarget, dwSelectedScheme, L"user", L"pass", nullptr);
+				ThrowLastError(bRet == FALSE, "WinHttpSetCredentials failed");
+
+				break;
+			}
+			default:
+			{
+				return response;
+			}
+			}
+
+		}//while(!bDone)
+
 
 		//200 OK
 		for (;;)
@@ -101,6 +138,33 @@ namespace Win32Util {namespace HttpUtil {
 		return response;
 	}
 
+	DWORD CHttpClient::Impl::ChooseAuthScheme(DWORD dwSupportedSchemes)
+	{
+		if (dwSupportedSchemes & WINHTTP_AUTH_SCHEME_NEGOTIATE)
+		{
+			return WINHTTP_AUTH_SCHEME_NEGOTIATE;
+		}
+		else if (dwSupportedSchemes & WINHTTP_AUTH_SCHEME_NTLM)
+		{
+			return WINHTTP_AUTH_SCHEME_NTLM;
+		}
+		else if (dwSupportedSchemes & WINHTTP_AUTH_SCHEME_PASSPORT)
+		{
+			return WINHTTP_AUTH_SCHEME_PASSPORT;
+		}
+		else if (dwSupportedSchemes & WINHTTP_AUTH_SCHEME_DIGEST)
+		{
+			return WINHTTP_AUTH_SCHEME_DIGEST;
+		}
+		else if (dwSupportedSchemes & WINHTTP_AUTH_SCHEME_BASIC)
+		{
+			return WINHTTP_AUTH_SCHEME_BASIC;
+		}
+		else
+		{
+			return 0;
+		}
+	}
 	
 	void CHttpClient::Impl::ParseUrl(const std::wstring& sUrl, std::wstring& sHostName, std::wstring& sPath)
 	{
