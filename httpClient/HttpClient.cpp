@@ -2,8 +2,10 @@
 #include "Win32Exception.h"
 #include <Windows.h>
 #include <winhttp.h>
+#include <wincred.h>
 
 #pragma comment(lib,"winhttp.lib")
+#pragma comment (lib, "credui.lib")
 
 namespace Win32Util {namespace HttpUtil {
 
@@ -17,6 +19,7 @@ namespace Win32Util {namespace HttpUtil {
 		void SetHeader(const std::wstring& sHeader);
 		Response get(const std::wstring& sUrl);
 
+		BOOL ShowCredentialDialog(const std::wstring& sHostName, std::wstring& sUserName, std::wstring& sPasswd);
 		DWORD ChooseAuthScheme(DWORD dwSupportedSchemes);
 
 		//URLをホスト名とパスに分解する
@@ -106,7 +109,15 @@ namespace Win32Util {namespace HttpUtil {
 					return response;
 				}
 
-				bRet = WinHttpSetCredentials(hRequest.get(), dwTarget, dwSelectedScheme, L"user", L"pass", nullptr);
+				std::wstring sUserName;
+				std::wstring sPasswd;
+				bRet = ShowCredentialDialog(sHostName, sUserName, sPasswd);
+				if (bRet == FALSE)
+				{
+					return response;
+				}
+
+				bRet = WinHttpSetCredentials(hRequest.get(), dwTarget, dwSelectedScheme, sUserName.c_str(), sPasswd.c_str(), nullptr);
 				ThrowLastError(bRet == FALSE, "WinHttpSetCredentials failed");
 
 				break;
@@ -136,6 +147,31 @@ namespace Win32Util {namespace HttpUtil {
 		}
 
 		return response;
+	}
+
+	BOOL CHttpClient::Impl::ShowCredentialDialog(const std::wstring& sHostName, std::wstring& sUserName, std::wstring& sPasswd)
+	{
+		constexpr size_t BUFFER_SIZE = 256;
+		std::vector<WCHAR> szTmpUserName(BUFFER_SIZE);
+		std::vector<WCHAR> szDomain(BUFFER_SIZE);
+		std::vector<WCHAR> szPasswd(BUFFER_SIZE);
+		DWORD dwRet = CredUIPromptForCredentials(nullptr, sHostName.c_str(), nullptr, 0, szTmpUserName.data(), szTmpUserName.size(), szPasswd.data(), szPasswd.size(), nullptr, CREDUI_FLAGS_DO_NOT_PERSIST);
+		if (dwRet != NO_ERROR)
+		{
+			return FALSE;
+		}
+
+		sPasswd = std::wstring(szPasswd.data());
+
+		std::vector<WCHAR> szUserName(BUFFER_SIZE);
+		//「ドメイン\ユーザー名」をパースしユーザー名を抽出する
+		dwRet = CredUIParseUserName(szTmpUserName.data(), szUserName.data(), szUserName.size(), szDomain.data(), szDomain.size());
+		if (dwRet != NO_ERROR)
+		{
+			return FALSE;
+		}
+		sUserName = std::wstring(szUserName.data());
+		return TRUE;
 	}
 
 	DWORD CHttpClient::Impl::ChooseAuthScheme(DWORD dwSupportedSchemes)
