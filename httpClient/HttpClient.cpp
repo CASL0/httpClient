@@ -39,6 +39,14 @@ namespace Win32Util {namespace HttpUtil {
 		m_sHeaders(std::wstring())
 	{
 		ThrowLastError(m_hSession == nullptr, "WinHttpOpen failed");
+
+		DWORD protocolOption = WINHTTP_PROTOCOL_FLAG_HTTP2;
+		BOOL bRet = WinHttpSetOption(m_hSession.get(), WINHTTP_OPTION_ENABLE_HTTP_PROTOCOL, &protocolOption, sizeof(protocolOption));
+		if (bRet == FALSE)
+		{
+			//http/2 not supported
+		}
+
 	}
 
 	void CHttpClient::Impl::SetHeader(const std::wstring& sHeader)
